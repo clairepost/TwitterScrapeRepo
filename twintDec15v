@@ -1,0 +1,307 @@
+# for Code Combination
+import twint
+import pandas as pd
+# for Regular Expression
+import csv
+import re
+# to deal with non-existent file bug
+import os.path
+
+
+class colors:  # from https://www.delftstack.com/howto/python/python-print-colored-text/
+    BLUE = '\033[94m'
+    RED = '\033[91m'
+    YELLOW = '\u001b[33m'
+    GREEN = '\u001b[32m'
+    RESET = '\033[0m' # reset color
+
+
+def search_terms():
+    listOfTerms = []
+    count = 1
+    print(colors.BLUE + "\n*** Instructions ***")
+    print("To enter a search term in the appropriate Twint search form, simply enter a word.\n"
+          "To enter a search phrase, write the phrase with \"" "\". For example, \"""is more vaccinated than""\".\n"
+          "Enter \"""-\""" to stop entering search terms.\n" + colors.RESET)
+    userInput = input("Please enter search term / phrase #" + str(count) + ":\n>> ")
+    while userInput != "-":
+        count+=1
+        listOfTerms.append(userInput)
+        userInput = input("Please enter search term / phrase #" + str(count) + ":\n>> ")
+    return listOfTerms
+
+
+def batch_run(listOfTerms, geo, time, limit, batch):
+    TermList = []
+    batchTweets = []
+    batchCSV = input("Enter the name of the combined output of BATCH files, ending with \""".csv""\":\n>> ")
+    unfilteredBatch = "DUPLICATES_" + batchCSV
+    print(colors.YELLOW + "You can ignore the file DUPLICATES_" + str(batchCSV) + colors.RESET)
+    while ".csv" not in batchCSV:  # error checking
+        print("Retry:")
+        batchCSV = input("Enter the name of the combined output of combined files, ending with \""".csv""\":\n>> ")
+    for r in listOfTerms:
+        term = twint.Config()
+        term.Search = r
+        term.Filter_retweets = True
+        if geo != "None":
+            term.Geo = geo
+        if time[0] != "None" and time[1] != "None":
+            term.Since = time[0]
+            term.Until = time[1]
+        if limit != None:
+            term.Limit = limit  # this is usually ignored but does limit the number of tweets
+        term.Store_csv = True
+        term.Hide_output = True
+        term.Count = True
+        term.Output = unfilteredBatch  # should be all of the search results. should have more tweets than filtered one
+        TermList.append(term)
+    l_count = 0
+    list_of_unique_tweets = []
+    for t in TermList:
+        for b in range(batch): # searches batch times
+            print("\n###############\n")
+            print("Running Batch #" + str(b + 1) + " for " + listOfTerms[l_count] + "\n")
+            print("###############\n")
+            twint.run.Search(t)
+        batchTweets = t.Output  # this actually collects all the tweets
+        write_CSV_Batch(batchTweets, batchCSV, list_of_unique_tweets)
+        l_count += 1
+    return batchCSV
+
+
+def write_CSV_Batch(batchTweets, batchCSV, listLines):
+    if not os.path.exists(batchTweets):  # if os.path.exists(l) returns false, this file does not exist
+        print(colors.YELLOW + "NOTE: >>", batchTweets, "<< will not exist because there were no search results." + colors.RESET)
+        return  # don't do anything if DUPLICATE_ file doesn't exist
+    inFile = open(batchTweets, 'r', encoding="utf8")
+    outFile = open(batchCSV, 'a', encoding="utf8")
+    for line in inFile:
+        id = line.split(",")
+        if id[0] not in listLines: # currently just checks if there is the exact line: username, tweet content...
+            outFile.write(line)
+            listLines.append(id[0])
+        else:
+            # needs to check if the lines also exist in the file already
+            continue
+    outFile.close()
+    inFile.close()
+
+
+def batch_search():
+    numBatch = 1  # default
+    needBatch = input("\nDo you want to run the search multiple times? (y/n)\n>> ")
+    if needBatch == "y":
+        numBatch = input("Please enter the number of times you would like to run:\n>> ")
+        while not numBatch.isnumeric():
+            print("Not a number!")
+            numBatch = input("Please enter the number of times you would like to run:\n>> ")
+    return int(numBatch)
+
+
+def location_constraints():
+    GeoCoor = "None"
+    needGeo = input("Do you want to add a location constraint for the search results? (y/n)\n>> ")
+    if needGeo == "y":
+        GeoCoor = input("Please enter the coordinates of a location and a radius, such as 49.531372,-96.689974,3500km:\n>> ")
+    return GeoCoor
+
+
+def time_constraints():
+    split_time = ["None", "None"]
+    needTime = input("Do you want to add time constraints for the search results? (y/n)\n>> ")
+    if needTime == "y":
+        time = input("Please enter the time constraint as FROM_date,TO_date in the format YYYY-MM-DD,YYYY-MM-DD:\n>> ")
+        split_time = time.split(",")
+    return split_time #[sinceTime, untilTime]
+
+
+def limit_search():
+    limit = None
+    needLimit = input("Do you want to add a limit on how many tweets the search results should have? (y/n) \n"
+                      + colors.YELLOW + "* CAUTION: Twint does not always follow the limit *" + colors.RESET + "\n>> ")
+    if needLimit == "y":
+        limit = input("Please enter a number:\n>> ")
+    return limit
+
+
+def search_with_twint(listOfTerms, geo, time, limit):
+    TermList = []
+    csvFilesCollection = []
+    for r in range(len(listOfTerms)):
+        term = twint.Config()
+        term.Search = listOfTerms[r]
+        term.Filter_retweets = True     # no retweets
+        if geo != "None":
+            term.Geo = geo
+        if time[0] != "None" and time[1] != "None":
+            term.Since = time[0]
+            term.Until = time[1]
+        if limit != None:
+            term.Limit = limit       # need to see why it's being ignored
+        CSV_Storage(term, listOfTerms[r], r+1, csvFilesCollection)
+        TermList.append(term)
+    termCount = -1
+    for r in TermList:
+        termCount += 1
+        twint.run.Search(r)   # this line runs the search
+    return csvFilesCollection
+
+
+def CSV_Storage(term, word, count, csvDatabase):
+    csvFileName = input("Enter name of the output file for Search Term #" + str(count) + ", \"" + word +
+                        "\""", ending with \""".csv""\":\n>> ")
+    while ".csv" not in csvFileName:    # error checking
+        print("Retry:")
+        csvFileName = input("Enter name of the output file for Search Term #" + str(count) + ", " + word +
+                            ", ending with \""".csv""\":\n>> ")
+    term.Store_csv = True    # store the tweets in CSV
+    term.Output = csvFileName   # path to CSV files
+    csvDatabase.append(csvFileName)
+
+
+def combined_csv(listOfCSV):    # merging the csv files
+    comboCSV = input("Enter the name of the final output of combined files, ending with \""".csv""\":\n>> ")
+    while ".csv" not in comboCSV:   # error checking
+        print("Retry:")
+        comboCSV = input("Enter the name of the final output of combined files, ending with \""".csv""\":\n>> ")
+    for l in listOfCSV:
+        if not os.path.exists(l): # if os.path.exists(l) returns false, this file does not exist
+            print(colors.YELLOW + "**** NOTE: >>", l, "<< will not exist because there were no search results. ****" + colors.RESET)
+            listOfCSV.remove(l)
+    combined = pd.concat(map(pd.read_csv, listOfCSV), ignore_index=True)
+    combined.to_csv(comboCSV)
+    return comboCSV
+
+
+def for_concatenating_csvfiles():
+    listOfTerms = []
+    count = 1
+    print(colors.BLUE + "\n*** Instructions ***")
+    print("Please enter the names of (already created!) files you would like to concatenate together into one csv file. "
+          "\nEnter \"""-\""" to finish entering files." + colors.RESET)
+    userInput = input("Enter name of file " + str(count) + " to concatenate ending with \""".csv""\":\n>> ")
+    while userInput != "-":
+        while ".csv" not in userInput:  # error checking
+            print("Retry:")
+            userInput = input("Enter name of file " + str(count) + " ending with \""".csv""\":\n>> ")
+        count += 1
+        listOfTerms.append(userInput)
+        userInput = input("Enter file name #" + str(count) + " ending with \""".csv""\":\n>>")
+    return listOfTerms
+
+
+def regular_expression1(fileIn): # now to analyze with re.py
+    inFile = fileIn  # input the combined file
+    fileOut = input("Enter the name to call your Regular Expression CSV file, ending with \""".csv""\":\n>> ")
+    while ".csv" not in fileOut:    # error checking
+        print("Retry:")
+        fileOut = input("Enter the name to call your Regular Expression CSV file, ending with \""".csv""\":\n>> ")
+    outFile = fileOut   # the output file
+    column = 11     # there are 37 columns used by Twint. We only want to look at column 11 (or 12-1 for indexing purposes) that has the tweet with the critical string
+    regInput = input("Enter a line of code in Regular Expression: \n>> ")
+    regex = regInput    # enter the regex expression we are looking for
+    try:
+        readFile = open(inFile, "r", encoding="utf-8")
+        reader = csv.reader(readFile)
+        # opens file with csv module which takes into account varying csv formats and parses correctly
+    except IOError:
+        exit(1)  # if failed to open
+    # Opens CSV file for writing.
+    try:
+        writeFile = open(outFile, "w", encoding="utf-8")
+        writer = csv.writer(writeFile)
+    except IOError:  # if any errors arise and not able to write
+        exit(1)
+    readFile.seek(0)  # Resets file iterator back to 0 so program does not skip first row.
+    # searching for Regular Expressions and writing row if they are there
+    for row in reader:
+        foundElement = re.search(regex, row[column])  # Uses regex to replace a portion of an element string with a replacement string.
+        if foundElement is not None:  # if there are matches
+            # row[column] = foundElement
+            writer.writerow(row)  # writes row to outgoing file.
+    # close both of the read and write files
+    readFile.close()
+    writeFile.close()
+    return fileOut
+
+
+def regular_expression2(): # now to analyze with re.py
+    print(colors.BLUE + "\n*** Instructions ***")
+    fileIn = input("Enter a CSV file, ending with \""".csv""\" (combined .csv files recommended):" + colors.RESET + "\n>> ")
+    while ".csv" not in fileIn:     # error checking
+        print("Retry:")
+        fileIn = input("Enter a CSV file, ending with \""".csv""\" (combined .csv files recommended): \n>> ")
+    inFile = fileIn  # input the combined file
+    fileOut = input("Enter the name to call your Regular Expression CSV file, ending with \""".csv""\":\n>> ")
+    while ".csv" not in fileOut:    # error checking
+        print("Retry:")
+        fileOut = input("Enter the name to call Regular Expression CSV file, ending with \""".csv""\":\n>> ")
+    outFile = fileOut   # the output file
+    column = 11     # there are 37 columns used by Twint. We only want to look at column 11 (or 12-1 for indexing purposes) that has the tweet with the critical string
+    regInput = input("Enter a line of code in Regular Expression: \n>> ")
+    regex = regInput    # enter the regex expression we are looking for
+    try:
+        readFile = open(inFile, "r", encoding="utf-8")
+        reader = csv.reader(readFile)
+        # opens file with csv module which takes into account varying csv formats and parses correctly
+    except IOError:
+        exit(1)  # if failed to open
+    # Opens CSV file for writing.
+    try:
+        writeFile = open(outFile, "w", encoding="utf-8")
+        writer = csv.writer(writeFile)
+    except IOError:  # if any errors arise and not able to write
+        exit(1)
+    readFile.seek(0)  # Resets file iterator back to 0 so program does not skip first row.
+    # searching for Regular Expressions and writing row if they are there
+    for row in reader:
+        foundElement = re.search(regex, row[column])  # Uses regex to replace a portion of an element string with a replacement string.
+        if foundElement is not None:  # if there are matches
+            # row[column] = foundElement
+            writer.writerow(row)  # writes row to outgoing file.
+    # close both of the read and write files
+    readFile.close()
+    writeFile.close()
+    return fileOut
+
+
+def main():
+    print()
+    print("*** Welcome to Twint - Elsi's Lab edition! ***\n")
+    searchFirst = input("Please enter: \n"
+                        "\t1 for Twitter Scraping (batch searching available) -> Concatenating existing files -> Regular Expressions\n"
+                        "\t2 for Regular Expressions on an existing file only\n"
+                        "\t3 for Concatenating existing files only.\n>> ")
+    if searchFirst == "1":
+        searchList = []
+        csvList = []
+        batch = batch_search()
+        searchList = search_terms()
+        geo = location_constraints()
+        time = time_constraints()
+        limit = limit_search()
+        if batch == 1:
+            csvList = search_with_twint(searchList, geo, time, limit)
+            final = combined_csv(csvList)
+        else:
+            final = batch_run(searchList, geo, time, limit, batch)
+        print("\n\nDone! Please check " + colors.GREEN + final + colors.RESET + " in your folder for all Twint search results after this program finishes.")
+        regEx = input("Do you want to use the Regular Expression function for your " + final + "? (y/n)\n>> ")
+        if regEx == "y":
+            regExFile = regular_expression1(final)
+            print("Done! Please check " + colors.GREEN + regExFile + colors.RESET + " in your folder for the Regular Expression search results.")
+    elif searchFirst == "2":
+        regExFile = regular_expression2()
+        print("Done! Please check " + colors.GREEN + regExFile + colors.RESET + " in your folder for the Regular Expression search results.")
+    elif searchFirst == "3":
+        terms = for_concatenating_csvfiles()
+        concatenated_file = combined_csv(terms)
+        print("Done! Please check " + colors.GREEN + concatenated_file + colors.RESET + "in your folder.")
+    else:
+        print("\nOops, please re-run the program.")
+        return 0
+    print("Thanks for using our program!")
+
+
+main()
